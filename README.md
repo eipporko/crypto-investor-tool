@@ -68,6 +68,48 @@ python fear_and_greed_index.py
 
 ---
 
+## GPT Prompt Bitcoin Analysis Script
+
+Utilize the power of GPT (Generative Pre-trained Transformer) for in-depth analysis of the Bitcoin market. This script fetches historical data, calculates the 2-Year Moving Average (MA) and its multiplier, fetches the current Bitcoin data, and uses GPT to analyze and provide recommendations for both conservative and aggressive investment strategies based on current market conditions.
+
+### Installation and Usage
+
+Dependencies: `requests`, `pandas`, `numpy`, `datetime`, `openai`. Ensure you have installed the previous dependencies listed for other scripts and then install the OpenAI library via pip:
+
+```bash
+pip install openai
+```
+
+Before running the script, you need an OpenAI API key. Please visit [OpenAI](https://openai.com/api/) to obtain your API key.
+
+To run:
+
+```bash
+python gptprompt_market_analysis.py --gpt_token YOUR_OPENAI_API_TOKEN
+```
+
+Additional arguments include `--language` to specify the analysis's language, defaulting to English if not provided.
+
+### Features of the Script
+
+- **Fetches Historical Data**: Collects historical pricing and volume data for Bitcoin.
+- **Calculates MA and Multiplier**: Computes the 2-Year MA and its 5x multiplier for trend analysis.
+- **GPT-Driven Analysis**: Leverages GPT for market analysis and investment strategy recommendations.
+- **Supports Multiple Languages**: Capable of providing analysis in different languages.
+
+### Insights Provided
+
+- **Market Trends**: Understand current market trends compared to historical averages.
+- **Investment Strategies**: Receive tailored investment strategies based on advanced AI analysis.
+- **Volume Analysis**: Analyzes changes in trading volume against a 30-day average.
+- **Fear and Greed Index**: Incorporates the Fear and Greed Index for sentiment analysis.
+
+### Credits
+
+This script was developed to integrate advanced AI analysis into cryptocurrency market strategies. The usage of OpenAI's GPT for financial analysis represents a pioneering approach to investment strategy recommendations.
+
+---
+
 ## Conclusion
 
 Leverage these scripts for strategic insights into the cryptocurrency market. Ensure adherence to API data usage rules.
