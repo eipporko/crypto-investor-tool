@@ -85,7 +85,7 @@ Before running the script, you need an OpenAI API key. Please visit [OpenAI](htt
 To run:
 
 ```bash
-python gptprompt_market_analysis.py --gpt_token YOUR_OPENAI_API_TOKEN
+python gptprompt_market_analysis.py --gpt_token YOUR_OPENAI_API_TOKEN --language english --currency usd
 ```
 
 Additional arguments include `--language` to specify the analysis's language, defaulting to English if not provided.

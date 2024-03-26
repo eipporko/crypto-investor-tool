@@ -2,6 +2,7 @@ import requests
 import argparse
 import pandas as pd
 import numpy as np
+import time
 from datetime import datetime, timedelta
 from openai import OpenAI
 
@@ -9,18 +10,20 @@ from openai import OpenAI
 parser = argparse.ArgumentParser(description='Analyzes the cryptocurrency market using ChatGPT based on given inputs.')
 parser.add_argument('--gpt_token', type=str, required=True, help='The access token for OpenAI GPT. This token is required to make API requests.')
 parser.add_argument('--language', type=str, help='The language in which the analysis should be performed. Defaults to "English" if not specified.', default='english')
+parser.add_argument('--currency', type=str, help='Currency code', default='usd')
 args = parser.parse_args()
 
-# Function definition to fetch historical data
-def fetch_historical_data_with_volume(from_timestamp, to_timestamp):
+
+def fetch_historical_data_with_volume(from_timestamp, to_timestamp, currency):
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
     params = {
-        'vs_currency': 'usd',
+        'vs_currency': currency,
         'from': from_timestamp,
         'to': to_timestamp
     }
     response = requests.get(url, params=params)
     data = response.json()
+
     prices = data['prices']
     volumes = data['total_volumes']
     df = pd.DataFrame(prices, columns=['timestamp', 'price'])
@@ -32,8 +35,50 @@ def fetch_historical_data_with_volume(from_timestamp, to_timestamp):
 
 
 
+def fetch_historical_data_min_max_close(from_timestamp, to_timestamp, currency):
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
 
-# Function definition to calculate the MA and the multiplier
+    params = {
+        'vs_currency': currency,
+        'from': from_timestamp,
+        'to': to_timestamp
+    }
+    response = requests.get(url, params=params)
+    data = response.json()
+
+    prices = data['prices']
+    df = pd.DataFrame(prices, columns=['timestamp', 'price'])
+    df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('date', inplace=True)
+
+    daily_df = pd.DataFrame()
+    daily_df['daily_max'] = df['price'].resample('D').max()
+    daily_df['daily_min'] = df['price'].resample('D').min()
+    daily_df['daily_close'] = df['price'].resample('D').last()
+
+    return daily_df
+
+
+
+def calculate_pivot_points(df):
+    df['pivot_point'] = (df['daily_max'] + df['daily_min'] + df['daily_close']) / 3
+    df['R1'] = 2 * df['pivot_point'] - df['daily_min']
+    df['R2'] = df['pivot_point'] + (df['daily_max'] - df['daily_min'])
+
+    latest_pivot = df['pivot_point'].iloc[-1]
+    latest_R1 = df['R1'].iloc[-1]
+    latest_R2 = df['R2'].iloc[-1]
+
+    result = {
+        'pivot_point': latest_pivot,
+        'R1': latest_R1,
+        'R2': latest_R2,
+    }
+    
+    return result
+
+
+
 def calculate_2y_ma_multiplier(df):
     # Assuming 365 days per year, so 730 represents roughly 2 years
     df['MA_2y'] = df['price'].rolling(window=730, min_periods=1).mean()
@@ -42,7 +87,6 @@ def calculate_2y_ma_multiplier(df):
 
 
 
-# Function to fetch the Fear and Greed Index
 def fetch_fear_and_greed_index(days):
     api_url = "https://api.alternative.me/fng/"
     response = requests.get(f"{api_url}?limit={days}")
@@ -57,31 +101,30 @@ def fetch_fear_and_greed_index(days):
 
 
 
-# Function to fetch current crypto data
-def fetch_crypto_data(date):
-    dt_object = datetime.utcfromtimestamp(int(date.timestamp()))
-    date = dt_object.strftime('%d-%m-%Y')
-    url = 'https://api.coingecko.com/api/v3/coins/bitcoin/history'
+def fetch_crypto_data(date, currency):
+    url = 'https://api.coingecko.com/api/v3/coins/markets'
     params = {
-        'date': date
+        'vs_currency': currency,
+        'ids': 'bitcoin',
     }
     response = requests.get(url, params=params)
     data = response.json()
 
     results = {
-        'price': data["market_data"]["current_price"]["usd"],
-        'volume': data["market_data"]["total_volume"]["usd"]
+        'price': data[-1]["current_price"],
+        'volume': data[-1]["total_volume"]
     }
+
     return results
 
 
 
-def calculate_average_volume_last_date(df, days):
+def calculate_average_volume_last_x_days(df, days):
     df_sorted = df.sort_index()
 
     last_date = df_sorted.index[-1]
     
-    start_date = last_date - timedelta(days=30)
+    start_date = last_date - timedelta(days=days)
     
     df_filtered = df_sorted.loc[start_date:last_date]
     
@@ -91,105 +134,119 @@ def calculate_average_volume_last_date(df, days):
 
 
 
-def get_analysis_data(df, current_data):
+def get_analysis_data(df, current_data, latest_pivot_points):
     last_row = df.iloc[-1]
     ma_2y = last_row['MA_2y']
     ma_2y_multiplier = last_row['MA_2y_multiplier']
-    volume_mean = calculate_average_volume_last_date(df, 30)
+    volume_mean_last_30_days = calculate_average_volume_last_x_days(df, 30)
     fear_and_greed_index = fetch_fear_and_greed_index(1).iloc[-1]['fear_and_greed_index']
 
     diff_ma_2y = current_data['price'] - ma_2y
     diff_ma_2y_percent = (diff_ma_2y / ma_2y) * 100
     diff_ma_2y_multiplier = current_data['price'] - ma_2y_multiplier
     diff_ma_2y_multiplier_percent = (diff_ma_2y_multiplier / ma_2y_multiplier) * 100
-    diff_volume = current_data['volume'] - volume_mean
-    diff_volume_percent = ( diff_volume / volume_mean ) * 100
+    diff_volume_last_30_days = current_data['volume'] - volume_mean_last_30_days
+    diff_volume_percent_last_30_days = ( diff_volume_last_30_days / volume_mean_last_30_days ) * 100
     
+    df_sorted = df.sort_index()
+    diff_volume_last_24_h = current_data['volume'] - df_sorted['volume'].iloc[-1]
+    diff_volume_percent_last_24_h = ( diff_volume_last_24_h / df_sorted['volume'].iloc[-1] ) * 100
+
     results = {
         'current_price': current_data['price'],
         'current_volume': current_data['volume'],
-        'volume_mean_last_30_days': volume_mean,
+        'volume_mean_last_30_days': volume_mean_last_30_days,
         'ma_2y': ma_2y,
         'ma_2y_multiplier': ma_2y_multiplier,
         'diff_ma_2y': diff_ma_2y,
         'diff_ma_2y_percent': diff_ma_2y_percent,
         'diff_ma_2y_multiplier': diff_ma_2y_multiplier,
         'diff_ma_2y_multiplier_percent': diff_ma_2y_multiplier_percent,
-        'diff_volume': diff_volume,
-        'diff_volume_percent': diff_volume_percent,
-        'fear_and_greed_index': fear_and_greed_index
+        'diff_volume_last_30_days': diff_volume_last_30_days,
+        'diff_volume_percent_last_30_days': diff_volume_percent_last_30_days,
+        'diff_volume_last_24_h': diff_volume_last_24_h,
+        'diff_volume_percent_last_24_h': diff_volume_percent_last_24_h,
+        'fear_and_greed_index': fear_and_greed_index,
+        'pivot_point': latest_pivot_points['pivot_point'],
+        'R1': latest_pivot_points['R1'],
+        'R2': latest_pivot_points['R2']
     }
     
     return results
 
 
 
-def analyze_crypto_market(api_key, analysis_data, language='English'):
+def analyze_crypto_market(api_key, analysis_data, language='English', currency='usd'):
 
     client = OpenAI(
-        # This is the default and can be omitted
         api_key=api_key
     )
 
-    # Formato de los datos para el prompt
-    description = "You are an AI trained to analyze the cryptocurrency market and recommend actions based on specific market data and indicators."
+    description = "You are an AI trained to generate short and concise analysis (100 words maximum) of the cryptocurrency market and recommend actions based on specific market data and indicators."
     user_input = (
-        f"Based on the analysis of the cryptocurrency market with the following data: "
-        f"Current price of Bitcoin is ${analysis_data['current_price']:.2f}, "
-        f"the price is {analysis_data['diff_ma_2y_percent']:.2f}% {'above' if analysis_data['diff_ma_2y_percent'] > 0 else 'below'} "
-        f"the 2-year moving average, "
-        f"the price is {analysis_data['diff_ma_2y_multiplier_percent']:.2f}% {'above' if analysis_data['diff_ma_2y_multiplier_percent'] > 0 else 'below'} "
-        f"the 2-year moving average multiplied by 5, "
-        f"the trading volume has changed by {analysis_data['diff_volume_percent']:.2f}% compared to the 30-day average, "
+        f"Given the current landscape of the cryptocurrency market with the following key data points: "
+        f"Bitcoin's current price at {analysis_data['current_price']:.2f} {currency}, "
+        f"which is {analysis_data['diff_ma_2y_percent']:.2f}% {'above the 2-year moving average, indicating potential overvaluation,' if analysis_data['diff_ma_2y_percent'] > 0 else 'below the 2-year moving average, suggesting potential undervaluation,'} "
+        f"and {analysis_data['diff_ma_2y_multiplier_percent']:.2f}% {'above the 2-year MA x5, signaling extreme overvaluation,' if analysis_data['diff_ma_2y_multiplier_percent'] > 0 else 'below the 2-year MA x5, indicating more room for growth,'} "
+        f"the trading volume has changed by {analysis_data['diff_volume_percent_last_30_days']:.2f}% compared to the 30-day average, "
+        f"the trading volume has changed by {analysis_data['diff_volume_percent_last_24_h']:.2f}% compared to the last 24 hours, "
         f"and the Fear and Greed Index is at {analysis_data.get('fear_and_greed_index', 'not provided')}. "
-        f"Given this data, provide a concise analysis for both a conservative, long-term investment strategy and an aggressive, short-term investment strategy. "
-        f"If you mention any index, please specify its value. "
-        f"Conclude each strategy's analysis with a headline summarizing your recommendation. "
-        f"Please aim for a maximum of 20 words per strategy."
-        f"Please provide the analysis in {language}."
+        f"the pivot point is at {analysis_data['pivot_point']:.2f} {currency}, "
+        f"with the first resistance (R1) is at {analysis_data['R1']:.2f} {currency}, "
+        f"and the second resistance (R2) is at {analysis_data['R2']:.2f} {currency}. "
+        f"Craft a cohesive analysis that encapsulates a long-term conservative strategy alongside an aggressive short-term strategy for investing in Bitcoin. "
+        f"Incorporate the current price into the narrative and conclude with a clear recommendation on whether it is a good time to buy, sell, or hold Bitcoin positions, "
+        f"considering the provided market data and indicators. "
+        f"Imagine you are drafting a concise market insight section for a financial newspaper, aimed at guiding readers through the current investment climate for Bitcoin. "
+        f"Your summary should blend both strategies into a seamless narrative, highlighting key decision points and market indicators, "
+        f"and conclude with an actionable advice reflecting the current market conditions. "
+        f"Remember to prominently incorporate the current Bitcoin price within your analysis and conclusion. "
+        f"In case You mention any pivot or resistance points in the analysis, You'll make sure to include their values and explain what these levels typically indicate for the market. "
+        f"For the long haul, here's a golden nugget: it’s usually a smart move to buy Bitcoin when its price is chillin' below the 2-year MA, kind of like snagging a bargain before the price jumps. "
+        f"And when it’s partying way above the 2-year MAx5? That might be your cue to consider selling. Why? Because that's like riding the elevator to the top floor and stepping out before it heads back down. "
+        f"This way, you’re maximizing your profit potential by buying low and selling high. Just remember, the crypto market can be as unpredictable as weather in April, so always do your due diligence!"
+        f"Be clear in your analysis. "
+        f"When you talk about prices, let’s keep things crystal clear by sticking to the format and symbols that match our language and locale instead of write the currency code. "
+        f"Provide the output in {language}."
     )
 
 
-
-
     messages = [
-        {"role": "system", "content": "You are an AI trained to analyze the cryptocurrency market and recommend actions based on specific market data and indicators."},
+        {"role": "system", "content": description},
         {"role": "user", "content": user_input}
     ]
 
     try:
-        # Realiza la consulta a la API de OpenAI utilizando el formato de ChatCompletion
         completion = client.chat.completions.create(
             messages = messages,
-             model = "gpt-4",
+            model = "gpt-4",
         )
 
 
     except openai.error.OpenAIError as e:
-        # Maneja posibles errores con la API
         completion = f"OpenAI API error: {e}"
 
     return completion.choices[0].message.content
 
 
 
-
-
-# Assuming you want to fetch data from the beginning of Bitcoin trading on CoinGecko
-from_date = datetime(2013, 4, 28)
-from_timestamp = int(from_date.timestamp())
-to_date = datetime.now()
+now = datetime.now()
+to_date = datetime(now.year, now.month, now.day)
 to_timestamp = int(to_date.timestamp())
 
-# Fetch historical Bitcoin data
-df = fetch_historical_data_with_volume(from_timestamp, to_timestamp)
 
-# Calculate the 2-year MA and its multiplier
+df = fetch_historical_data_with_volume((to_date - timedelta(days=730)).timestamp(), to_timestamp, args.currency)
 df_ma = calculate_2y_ma_multiplier(df)
 
-current_price = fetch_crypto_data(to_date)
-analysis_data = get_analysis_data(df_ma, current_price)
+time.sleep(2)
 
-recomendation = analyze_crypto_market(args.gpt_token, analysis_data, args.language)
+df_min_max_last = fetch_historical_data_min_max_close((to_date - timedelta(days=7)).timestamp(), (to_date).timestamp(), args.currency) 
+latest_pivot_points = calculate_pivot_points(df_min_max_last)
+
+time.sleep(2)
+
+current_price = fetch_crypto_data(to_date, args.currency)
+analysis_data = get_analysis_data(df_ma, current_price, latest_pivot_points)
+recomendation = analyze_crypto_market(args.gpt_token, analysis_data, args.language, args.currency)
 
 print(recomendation)
